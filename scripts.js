@@ -1,41 +1,639 @@
-// ===== КОНФИГУРАЦИЯ =====
+// === КОНФИГУРАЦИЯ РЕАЛЬНОГО РЕЖИМА ===
 const CONFIG = {
-    // Для демо-режима
-    DEMO_MODE: true,
-    DEMO_DATA: {
-        teams: [
-            { id: 1, name: "Фениксы", score: 450, code: "TEAM01", color: "#FF6B6B", members: 4 },
-            { id: 2, name: "Титаны", score: 380, code: "TEAM02", color: "#4ECDC4", members: 5 },
-            { id: 3, name: "Волки", score: 520, code: "TEAM03", color: "#45B7D1", members: 4 },
-            { id: 4, name: "Орлы", score: 290, code: "TEAM04", color: "#96CEB4", members: 3 },
-            { id: 5, name: "Молния", score: 610, code: "TEAM05", color: "#FFEAA7", members: 5 },
-            { id: 6, name: "Викинги", score: 340, code: "TEAM06", color: "#DDA0DD", members: 4 }
-        ],
-        achievements: [
-            { id: 1, name: "Первые шаги", desc: "Войти в приложение", icon: "fa-door-open", earned: true },
-            { id: 2, name: "Быстрый старт", desc: "Получить 100 баллов", icon: "fa-bolt", earned: true },
-            { id: 3, name: "Лидер", desc: "Занять 1 место в рейтинге", icon: "fa-crown", earned: false },
-            { id: 4, name: "Социальный", desc: "Загрузить фото команды", icon: "fa-camera", earned: false },
-            { id: 5, name: "Победитель", desc: "Выиграть 5 заданий", icon: "fa-trophy", earned: false },
-            { id: 6, name: "Активный", desc: "Быть онлайн 3 часа", icon: "fa-fire", earned: true }
-        ],
-        tasks: [
-            { id: 1, title: "Квест: Тайны кампуса", time: "45 мин", reward: 50, urgent: true },
-            { id: 2, title: "Интеллектуальный батл", time: "1 ч 30 мин", reward: 30, urgent: false },
-            { id: 3, title: "Фото-челлендж", time: "2 ч", reward: 40, urgent: false },
-            { id: 4, title: "Командный квиз", time: "3 ч", reward: 60, urgent: false }
-        ]
-    },
-    
-    // Для реального режима (Google Apps Script)
-    API_URL: 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec',
-    ADMIN_CREDENTIALS: { login: 'admin', password: 'event2024' },
-    
-    // Настройки
-    REFRESH_INTERVAL: 10000, // 10 секунд
-    NOTIFICATION_DURATION: 5000 // 5 секунд
+  // Переключатель режима
+  DEMO_MODE: false, // ИЗМЕНИТЕ НА false ДЛЯ РЕАЛЬНОГО РЕЖИМА
+  
+  // URL вашего Google Apps Script (ЗАМЕНИТЕ НА СВОЙ)
+  API_URL: 'https://script.google.com/macros/s/AKfycbxTqAwe_PfNoqXBFuXkdcRkvR-p6EUSATCEJWbvIuv1yUhsoiURwrP8lreQSC5tuFz2pg/exec',
+  
+  // Альтернатива: прокси для обхода CORS (если нужно)
+  USE_PROXY: false,
+  PROXY_URL: 'https://corsproxy.io/?',
+  
+  // Настройки приложения
+  REFRESH_INTERVAL: 10000, // 10 секунд
+  CACHE_DURATION: 30000,   // 30 секунд
+  
+  // Цвета для команд (запасные)
+  TEAM_COLORS: [
+    '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD',
+    '#FF9FF3', '#F368E0', '#FF9F43', '#EE5A24', '#00D2D3', '#54A0FF'
+  ]
 };
 
+// === МОДУЛЬ API ===
+const API = {
+  // Генерация URL
+  getUrl(action, params = {}) {
+    let baseUrl = CONFIG.API_URL;
+    
+    if (CONFIG.USE_PROXY) {
+      baseUrl = CONFIG.PROXY_URL + encodeURIComponent(CONFIG.API_URL);
+    }
+    
+    const url = new URL(baseUrl);
+    
+    // Добавляем параметры
+    if (action) url.searchParams.append('action', action);
+    Object.keys(params).forEach(key => {
+      if (params[key] !== undefined && params[key] !== null) {
+        url.searchParams.append(key, params[key]);
+      }
+    });
+    
+    // Добавляем timestamp для избежания кеширования
+    url.searchParams.append('_t', Date.now());
+    
+    return url.toString();
+  },
+  
+  // Отправка запроса
+  async request(action, params = {}, method = 'GET', body = null) {
+    // Если демо-режим, используем локальные данные
+    if (CONFIG.DEMO_MODE && window.DEMO_DATA) {
+      return this.mockRequest(action, params, body);
+    }
+    
+    const url = this.getUrl(action, method === 'GET' ? params : {});
+    
+    const options = {
+      method: method,
+      mode: 'cors',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      }
+    };
+    
+    if (body && (method === 'POST' || method === 'PUT')) {
+      options.body = JSON.stringify(body);
+    }
+    
+    try {
+      console.log(`API ${action}:`, { url, params, body });
+      
+      const response = await fetch(url, options);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      if (!data.success) {
+        throw new Error(data.error || 'Unknown API error');
+      }
+      
+      return data;
+      
+    } catch (error) {
+      console.error(`API ${action} failed:`, error);
+      
+      // Фолбэк на демо-данные при ошибке
+      if (!CONFIG.DEMO_MODE && window.DEMO_DATA) {
+        console.warn('Falling back to demo data');
+        return this.mockRequest(action, params, body);
+      }
+      
+      throw error;
+    }
+  },
+  
+  // Мок-запрос для демо-режима
+  mockRequest(action, params, body) {
+    console.log(`Mock API: ${action}`, params);
+    
+    return new Promise((resolve) => {
+      // Имитируем задержку сети
+      setTimeout(() => {
+        const data = this.getMockData(action, params, body);
+        resolve(data);
+      }, 300);
+    });
+  },
+  
+  // Демо-данные (сохраните ваш существующий демо-код здесь)
+  getMockData(action, params, body) {
+    // Ваш существующий код getMockData из предыдущего ответа
+    // ... (оставьте без изменений)
+  },
+  
+  // === КОНКРЕТНЫЕ API МЕТОДЫ ===
+  
+  // Авторизация
+  async loginTeam(code) {
+    return this.request('loginTeam', { code: code.toUpperCase() });
+  },
+  
+  async loginAdmin(username, password) {
+    return this.request('loginAdmin', { username, password });
+  },
+  
+  // Команды
+  async getTeams() {
+    const cacheKey = 'teams_cache';
+    const cached = this.getCached(cacheKey);
+    
+    if (cached) {
+      console.log('Using cached teams');
+      return cached;
+    }
+    
+    const data = await this.request('getTeams');
+    
+    if (data.success) {
+      this.setCached(cacheKey, data, CONFIG.CACHE_DURATION);
+    }
+    
+    return data;
+  },
+  
+  async getTeam(idOrCode) {
+    return this.request('getTeam', { id: idOrCode, code: idOrCode });
+  },
+  
+  // Баллы
+  async addPoints(teamId, points, reason, moderator, comment) {
+    return this.request('addPoints', {}, 'POST', {
+      teamId,
+      points,
+      reason,
+      moderator,
+      comment
+    });
+  },
+  
+  async getTransactions(teamId, limit = 20) {
+    return this.request('getTransactions', { teamId, limit });
+  },
+  
+  // Рейтинг
+  async getRating() {
+    const cacheKey = 'rating_cache';
+    const cached = this.getCached(cacheKey);
+    
+    if (cached) {
+      console.log('Using cached rating');
+      return cached;
+    }
+    
+    const data = await this.request('getRating');
+    
+    if (data.success) {
+      this.setCached(cacheKey, data, 5000); // Короткий кеш для рейтинга
+    }
+    
+    return data;
+  },
+  
+  // Задания
+  async getTasks() {
+    return this.request('getTasks');
+  },
+  
+  // Ачивки
+  async getAchievements() {
+    return this.request('getAchievements');
+  },
+  
+  // Уведомления
+  async getNotifications(teamId, unreadOnly = false) {
+    return this.request('getNotifications', { teamId, unreadOnly });
+  },
+  
+  async markNotificationRead(notificationId) {
+    // Реализуйте если нужно
+    return { success: true };
+  },
+  
+  // Статистика
+  async getStats() {
+    return this.request('getStats');
+  },
+  
+  // Системные
+  async healthCheck() {
+    return this.request('healthCheck');
+  },
+  
+  async getEventInfo() {
+    return this.request('getEventInfo');
+  },
+  
+  // === КЕШИРОВАНИЕ ===
+  getCached(key) {
+    const item = localStorage.getItem(`cache_${key}`);
+    
+    if (!item) return null;
+    
+    const { data, expires } = JSON.parse(item);
+    
+    if (Date.now() > expires) {
+      localStorage.removeItem(`cache_${key}`);
+      return null;
+    }
+    
+    return data;
+  },
+  
+  setCached(key, data, duration) {
+    const item = {
+      data: data,
+      expires: Date.now() + duration
+    };
+    
+    localStorage.setItem(`cache_${key}`, JSON.stringify(item));
+  },
+  
+  clearCache() {
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('cache_')) {
+        localStorage.removeItem(key);
+      }
+    });
+  }
+};
+
+// === ОБНОВЛЕНИЕ ФУНКЦИЙ ПРИЛОЖЕНИЯ ===
+
+// Замените все вызовы демо-функций на API вызовы:
+
+async function loginAsTeam() {
+  const code = document.getElementById('team-code').value.trim().toUpperCase();
+  const playerName = document.getElementById('player-name').value.trim();
+  
+  if (!code) {
+    showNotification('Введите код команды', 'error');
+    return;
+  }
+  
+  if (!playerName) {
+    showNotification('Введите ваше имя', 'error');
+    return;
+  }
+  
+  showLoading(true);
+  
+  try {
+    const result = await API.loginTeam(code);
+    
+    if (result.success) {
+      state.currentTeam = result.team;
+      state.authToken = result.token;
+      
+      localStorage.setItem('currentTeam', JSON.stringify(state.currentTeam));
+      localStorage.setItem('playerName', playerName);
+      localStorage.setItem('authToken', state.authToken);
+      
+      // Сохраняем имя игрока в состоянии команды
+      state.currentTeam.playerName = playerName;
+      
+      switchScreen('team-screen');
+      loadTeamDashboard();
+      
+      showNotification(`Добро пожаловать, ${playerName}!`, 'success');
+      
+      // Запускаем автообновление
+      startAutoRefresh();
+      
+    } else {
+      showNotification(result.error || 'Ошибка входа', 'error');
+    }
+    
+  } catch (error) {
+    console.error('Login error:', error);
+    showNotification('Ошибка соединения с сервером', 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function loginAsAdmin() {
+  const username = document.getElementById('admin-login').value.trim();
+  const password = document.getElementById('admin-password').value;
+  
+  if (!username || !password) {
+    showNotification('Заполните все поля', 'error');
+    return;
+  }
+  
+  showLoading(true);
+  
+  try {
+    const result = await API.loginAdmin(username, password);
+    
+    if (result.success) {
+      state.isAdmin = true;
+      state.authToken = result.token;
+      
+      localStorage.setItem('isAdmin', 'true');
+      localStorage.setItem('authToken', state.authToken);
+      localStorage.setItem('adminData', JSON.stringify(result.admin));
+      
+      switchScreen('admin-screen');
+      loadAdminDashboard();
+      
+      showNotification(`Администратор: ${result.admin.username}`, 'success');
+      
+      // Запускаем автообновление
+      startAutoRefresh();
+      
+    } else {
+      showNotification(result.error || 'Ошибка входа', 'error');
+    }
+    
+  } catch (error) {
+    console.error('Admin login error:', error);
+    showNotification('Ошибка соединения с сервером', 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function loadTeamDashboard() {
+  if (!state.currentTeam) return;
+  
+  showLoading(true);
+  
+  try {
+    // Параллельно загружаем все данные
+    const [teamData, transactionsData, ratingData, notificationsData, statsData] = await Promise.all([
+      API.getTeam(state.currentTeam.id || state.currentTeam.code),
+      API.getTransactions(state.currentTeam.id, 10),
+      API.getRating(),
+      API.getNotifications(state.currentTeam.id, true),
+      API.getTeamStats ? API.getTeamStats(state.currentTeam.id) : Promise.resolve({ success: true, stats: {} })
+    ]);
+    
+    // Обновляем данные команды
+    if (teamData.success && teamData.team) {
+      state.currentTeam = { ...state.currentTeam, ...teamData.team };
+      updateTeamUI(state.currentTeam);
+    }
+    
+    // Обновляем историю
+    if (transactionsData.success) {
+      updateTransactionsUI(transactionsData.transactions || []);
+    }
+    
+    // Обновляем рейтинг
+    if (ratingData.success) {
+      updateRatingUI(ratingData.rating || []);
+    }
+    
+    // Обновляем уведомления
+    if (notificationsData.success) {
+      updateNotificationsUI(notificationsData.notifications || []);
+    }
+    
+    // Обновляем статистику
+    if (statsData.success) {
+      updateStatsUI(statsData.stats || {});
+    }
+    
+  } catch (error) {
+    console.error('Dashboard load error:', error);
+    showNotification('Ошибка загрузки данных', 'warning');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function loadAdminDashboard() {
+  showLoading(true);
+  
+  try {
+    const [teamsData, ratingData, statsData, transactionsData] = await Promise.all([
+      API.getTeams(),
+      API.getRating(),
+      API.getStats(),
+      API.getAllTransactions ? API.getAllTransactions(20) : Promise.resolve({ success: true, transactions: [] })
+    ]);
+    
+    // Обновляем список команд
+    if (teamsData.success) {
+      updateTeamsTable(teamsData.teams || []);
+      populateTeamSelect(teamsData.teams || []);
+    }
+    
+    // Обновляем рейтинг
+    if (ratingData.success) {
+      updateAdminRating(ratingData.rating || []);
+    }
+    
+    // Обновляем статистику
+    if (statsData.success) {
+      updateAdminStats(statsData.stats || {});
+    }
+    
+    // Обновляем последние транзакции
+    if (transactionsData.success) {
+      updateRecentTransactions(transactionsData.transactions || []);
+    }
+    
+  } catch (error) {
+    console.error('Admin dashboard error:', error);
+    showNotification('Ошибка загрузки данных администратора', 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function adminAddPoints() {
+  const teamId = parseInt(document.getElementById('admin-team-select').value);
+  const points = parseInt(document.getElementById('admin-points-input').value);
+  let reason = document.getElementById('admin-reason-select').value;
+  const comment = document.getElementById('admin-comment').value.trim();
+  const moderator = localStorage.getItem('adminData') ? 
+    JSON.parse(localStorage.getItem('adminData')).username : 'Администратор';
+  
+  if (!teamId || isNaN(points)) {
+    showNotification('Выберите команду и укажите количество баллов', 'error');
+    return;
+  }
+  
+  if (reason === 'custom') {
+    reason = document.getElementById('custom-reason').value.trim();
+    if (!reason) {
+      showNotification('Укажите причину начисления', 'error');
+      return;
+    }
+  }
+  
+  showLoading(true);
+  
+  try {
+    const result = await API.addPoints(teamId, points, reason, moderator, comment);
+    
+    if (result.success) {
+      showNotification(`Начислено ${points} баллов`, 'success');
+      
+      // Обновляем данные
+      API.clearCache(); // Сбрасываем кеш
+      loadAdminDashboard();
+      
+      // Сбрасываем форму
+      document.getElementById('admin-points-input').value = 10;
+      document.getElementById('admin-comment').value = '';
+      document.getElementById('admin-reason-select').value = 'Активность';
+      document.getElementById('custom-reason').style.display = 'none';
+      
+      // Если пользователь смотрит эту команду, обновляем его экран
+      if (state.currentTeam && state.currentTeam.id === teamId) {
+        loadTeamDashboard();
+      }
+      
+    } else {
+      showNotification(result.error || 'Ошибка начисления', 'error');
+    }
+    
+  } catch (error) {
+    console.error('Add points error:', error);
+    showNotification('Ошибка соединения с сервером', 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+// === ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РЕАЛЬНОГО РЕЖИМА ===
+
+// Проверка состояния сервера
+async function checkServerStatus() {
+  try {
+    const result = await API.healthCheck();
+    
+    if (result.success) {
+      console.log('Server status:', result.status);
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('Server check failed:', error);
+    return false;
+  }
+}
+
+// Автоматическое восстановление сессии
+async function restoreSession() {
+  const savedTeam = localStorage.getItem('currentTeam');
+  const savedAdmin = localStorage.getItem('isAdmin');
+  const savedToken = localStorage.getItem('authToken');
+  
+  // Проверяем состояние сервера
+  const serverOnline = await checkServerStatus();
+  
+  if (!serverOnline && CONFIG.DEMO_MODE) {
+    console.log('Server offline, using demo mode');
+    CONFIG.DEMO_MODE = true;
+    showNotification('Сервер недоступен. Используется демо-режим', 'warning');
+  }
+  
+  if (savedTeam && serverOnline) {
+    try {
+      const team = JSON.parse(savedTeam);
+      const playerName = localStorage.getItem('playerName');
+      
+      // Проверяем валидность сессии
+      const result = await API.getTeam(team.id || team.code);
+      
+      if (result.success) {
+        state.currentTeam = { ...team, ...result.team, playerName };
+        switchScreen('team-screen');
+        loadTeamDashboard();
+        showNotification(`С возвращением, ${playerName || 'участник'}!`, 'success');
+      } else {
+        localStorage.removeItem('currentTeam');
+      }
+    } catch (error) {
+      console.error('Session restore error:', error);
+    }
+  } else if (savedAdmin === 'true' && serverOnline) {
+    state.isAdmin = true;
+    switchScreen('admin-screen');
+    loadAdminDashboard();
+    showNotification('Сессия администратора восстановлена', 'info');
+  }
+}
+
+// WebSocket для реального времени (опционально)
+function initWebSocket() {
+  if (CONFIG.DEMO_MODE) return;
+  
+  // Используем long-polling или WebSocket если настроено
+  setInterval(async () => {
+    if (state.currentTeam) {
+      // Проверяем новые уведомления
+      const result = await API.getNotifications(state.currentTeam.id, true);
+      if (result.success && result.notifications.length > 0) {
+        result.notifications.forEach(notif => {
+          if (!notif.read) {
+            showNotification(notif.message, notif.type || 'info');
+          }
+        });
+      }
+      
+      // Обновляем данные каждые 30 секунд
+      if (Date.now() - (state.lastUpdate || 0) > 30000) {
+        loadTeamDashboard();
+        state.lastUpdate = Date.now();
+      }
+    }
+  }, 5000);
+}
+
+// === ИНИЦИАЛИЗАЦИЯ ===
+document.addEventListener('DOMContentLoaded', async function() {
+  // Устанавливаем тему
+  document.documentElement.setAttribute('data-theme', state.currentTheme);
+  updateThemeButton();
+  
+  // Показываем статус подключения
+  const statusElement = document.createElement('div');
+  statusElement.id = 'connection-status';
+  statusElement.style.cssText = `
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
+    padding: 5px 10px;
+    border-radius: 15px;
+    font-size: 12px;
+    z-index: 9999;
+    display: none;
+  `;
+  document.body.appendChild(statusElement);
+  
+  // Проверяем подключение
+  const isOnline = await checkServerStatus();
+  
+  if (isOnline) {
+    statusElement.textContent = '🟢 Онлайн';
+    statusElement.style.background = '#10b981';
+    statusElement.style.color = 'white';
+    statusElement.style.display = 'block';
+    
+    setTimeout(() => {
+      statusElement.style.display = 'none';
+    }, 3000);
+  } else {
+    statusElement.textContent = '🔴 Офлайн (демо)';
+    statusElement.style.background = '#ef4444';
+    statusElement.style.color = 'white';
+    statusElement.style.display = 'block';
+    
+    CONFIG.DEMO_MODE = true;
+    showNotification('Режим офлайн. Используются демо-данные', 'warning');
+  }
+  
+  // Восстанавливаем сессию
+  await restoreSession();
+  
+  // Инициализируем WebSocket/long-polling
+  initWebSocket();
+  
+  // Запускаем автообновление
+  startAutoRefresh();
+});
 // ===== СОСТОЯНИЕ ПРИЛОЖЕНИЯ =====
 let state = {
     currentTeam: null,
